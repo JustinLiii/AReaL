@@ -35,6 +35,10 @@ class StalenessManager:
         Expected batch size for consuming rollouts during training
     max_staleness : int
         Maximum allowed offpolicyness (version difference) for rollouts
+    base_version : int
+        Version offset for capacity accounting. This is useful after recovery,
+        where the model version resumes from a large checkpoint step while
+        rollout counters start from zero in the new process.
     """
 
     def __init__(
@@ -43,6 +47,7 @@ class StalenessManager:
         max_concurrent_rollouts: int,
         consumer_batch_size: int,
         max_staleness: int,
+        base_version: int = 0,
     ):
         """Initialize the staleness manager.
 
@@ -56,15 +61,32 @@ class StalenessManager:
             Expected batch size for consuming rollouts during training
         max_staleness : int
             Maximum allowed offpolicyness (version difference) for rollouts
+        base_version : int
+            Version offset for capacity accounting. Defaults to zero to preserve
+            fresh-run cumulative accounting.
         """
         self.version_provider = version_provider
         self.max_concurrent_rollouts = max_concurrent_rollouts
         self.consumer_batch_size = consumer_batch_size
         self.max_staleness = max_staleness
+        self.base_version = base_version
 
         # Thread-safe access to rollout statistics
         self.lock = Lock()
         self.rollout_stat = RolloutStat()
+
+    def reset_base_version(self, version: int | None = None) -> None:
+        """Reset the version offset used for staleness capacity accounting.
+
+        If ``version`` is omitted, the current version from ``version_provider`` is
+        used. This should be called after recovering a checkpoint so newly
+        initialized rollout counters are measured relative to the recovered model
+        version instead of absolute global step zero.
+        """
+        if version is None:
+            version = self.version_provider.get_version()
+        with self.lock:
+            self.base_version = version
 
     def get_pending_limit(self) -> int:
         """Get the maximum number of pending rollouts allowed.
@@ -90,7 +112,7 @@ class StalenessManager:
         Notes
         -----
         The staleness control formula is:
-        max_samples = (max_staleness + current_version + 1) * consumer_batch_size
+        max_samples = (max_staleness + version_delta + 1) * consumer_batch_size
         capacity = min(concurrency_limit, max_samples - current_samples)
 
         This ensures that by the time samples are consumed, they won't exceed
@@ -98,6 +120,7 @@ class StalenessManager:
         """
         with self.lock:
             current_version = self.version_provider.get_version()
+            version_delta = max(0, current_version - self.base_version)
             # Calculate concurrency-based capacity
             max_concurrent_rollouts = max(1, self.max_concurrent_rollouts)
             concurrency_capacity = max_concurrent_rollouts - self.rollout_stat.running
@@ -106,7 +129,7 @@ class StalenessManager:
             ofp = self.max_staleness
             sample_cnt = self.rollout_stat.accepted + self.rollout_stat.running
             consumer_bs = max(1, self.consumer_batch_size)
-            staleness_capacity = (ofp + current_version + 1) * consumer_bs - sample_cnt
+            staleness_capacity = (ofp + version_delta + 1) * consumer_bs - sample_cnt
 
             # Return the minimum of both constraints
             capacity = min(concurrency_capacity, staleness_capacity)

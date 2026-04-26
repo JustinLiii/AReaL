@@ -1060,6 +1060,14 @@ class RolloutController:
         with self._version_lock:
             return self._version
 
+    def reset_staleness_base_version(self, version: int | None = None) -> None:
+        manager = self.staleness_manager
+        if manager is None:
+            return
+        if version is None:
+            version = self.get_version()
+        manager.reset_base_version(version)
+
     def pause(self):
         self.dispatcher.pause()
         self._collective_rpc("pause", http_timeout=60.0)

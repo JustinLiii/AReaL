@@ -766,6 +766,27 @@ def test_parametrized_version_progression(version):
     assert capacity == min(1000, expected_staleness_capacity)
 
 
+def test_reset_base_version_uses_relative_version_for_capacity():
+    """Test capacity calculation after resetting the version base for recovery."""
+    version_provider = MockVersionProvider(100)
+
+    manager = StalenessManager(
+        version_provider=version_provider,
+        max_concurrent_rollouts=1000,
+        consumer_batch_size=32,
+        max_staleness=5,
+    )
+
+    # Fresh-run default preserves cumulative accounting from version zero.
+    assert manager.get_capacity() == min(1000, (5 + 100 + 1) * 32)
+
+    manager.reset_base_version(100)
+    assert manager.get_capacity() == (5 + 0 + 1) * 32
+
+    version_provider.set_version(103)
+    assert manager.get_capacity() == (5 + 3 + 1) * 32
+
+
 if __name__ == "__main__":
     # Run tests with pytest
     pytest.main([__file__, "-v"])

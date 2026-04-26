@@ -324,6 +324,11 @@ class RecoverHandler:
                 inference_engine.resume()
                 update_engine.set_version(recovery_version)
                 inference_engine.set_version(recovery_version)
+                reset_staleness_base_version = getattr(
+                    inference_engine, "reset_staleness_base_version", None
+                )
+                if callable(reset_staleness_base_version):
+                    reset_staleness_base_version(recovery_version)
             return recover_info
         except (FileNotFoundError, InValidRecoverInfo):
             logger.warning(
