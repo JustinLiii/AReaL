@@ -28,6 +28,7 @@ from areal.utils.data import (
     KLEstimator,
     Normalization,
     batched_call,
+    shuffle_padded_tensor_dict,
     split_padded_tensor_dict_into_mb_list,
 )
 from areal.utils.functional import (
@@ -319,6 +320,10 @@ class PPOActor:
             if rs.lower is not None:
                 scalars["rs_lower"] = rs.lower
         stats_tracker.scalar(**scalars)
+        stats_tracker.scalar(
+            ppo_n_epochs=self.config.ppo_n_epochs,
+            ppo_shuffle_minibatches=self.config.ppo_shuffle_minibatches,
+        )
 
         if self.config.log_agent_stats:
             stats_tracker.stat(
@@ -333,36 +338,42 @@ class PPOActor:
             data.pop(key, None)
         # NOTE: calling engine.train() is critical to enabling gradient checkpointing
         self.engine.train()
-        mb_inputs = split_padded_tensor_dict_into_mb_list(
-            data,
-            mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
-        )
 
         with stats_tracker.scope("update"):
-            # Get current version for proximal approximation metrics
-            current_version = self.engine.get_version()
-
-            for mb in mb_inputs.mbs:
-                train_stat = self.engine.train_batch(
-                    mb,
-                    loss_fn=functools.partial(
-                        grpo_loss_fn,
-                        eps_clip=self.config.eps_clip,
-                        eps_clip_higher=self.config.eps_clip_higher,
-                        c_clip=self.config.c_clip,
-                        rejection_sampling=self.config.rejection_sampling,
-                        m2_threshold=self.m2_threshold,
-                        importance_sampling_level=self.config.importance_sampling_level,
-                        current_version=current_version,
-                        prox_logp_method=self.config.prox_logp_method,
-                        use_sapo_loss=self.config.use_sapo_loss,
-                        sapo_tau_pos=self.config.sapo_tau_pos,
-                        sapo_tau_neg=self.config.sapo_tau_neg,
-                        use_decoupled_loss=self.config.use_decoupled_loss,
-                    ),
-                    loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+            for epoch_idx in range(self.config.ppo_n_epochs):
+                epoch_data = data
+                if self.config.ppo_shuffle_minibatches:
+                    epoch_data = shuffle_padded_tensor_dict(data)
+                mb_inputs = split_padded_tensor_dict_into_mb_list(
+                    epoch_data,
+                    mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
                 )
-                stats_tracker.scalar(**train_stat)
+
+                # Get current version for proximal approximation metrics
+                current_version = self.engine.get_version()
+                stats_tracker.scalar(ppo_epoch=epoch_idx)
+
+                for mb in mb_inputs.mbs:
+                    train_stat = self.engine.train_batch(
+                        mb,
+                        loss_fn=functools.partial(
+                            grpo_loss_fn,
+                            eps_clip=self.config.eps_clip,
+                            eps_clip_higher=self.config.eps_clip_higher,
+                            c_clip=self.config.c_clip,
+                            rejection_sampling=self.config.rejection_sampling,
+                            m2_threshold=self.m2_threshold,
+                            importance_sampling_level=self.config.importance_sampling_level,
+                            current_version=current_version,
+                            prox_logp_method=self.config.prox_logp_method,
+                            use_sapo_loss=self.config.use_sapo_loss,
+                            sapo_tau_pos=self.config.sapo_tau_pos,
+                            sapo_tau_neg=self.config.sapo_tau_neg,
+                            use_decoupled_loss=self.config.use_decoupled_loss,
+                        ),
+                        loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+                    )
+                    stats_tracker.scalar(**train_stat)
 
 
 class PPOActorController(TrainController):

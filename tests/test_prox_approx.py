@@ -16,6 +16,7 @@ from areal.utils.constants import (
     ProxApproxMethod,
     ProxLogpMethod,
 )
+from areal.utils.data import shuffle_padded_tensor_dict
 
 
 class TestProximalApproximations:
@@ -977,6 +978,103 @@ class TestComputeLogpMetricsLogging:
             # All imp_weight metrics should use "behave_imp_weight"
             if "imp_weight" in key and "importance_weight" not in key:
                 assert "behave_imp_weight" in key, f"Metric {key} uses wrong spelling"
+
+
+class TestPPOEpochs:
+    """Tests for reusing rollout batches across multiple PPO epochs."""
+
+    def test_shuffle_padded_tensor_dict_keeps_batch_rows_aligned(self):
+        torch.manual_seed(0)
+        data = {
+            "attention_mask": torch.ones(6, 3, dtype=torch.bool),
+            "input_ids": torch.arange(18).view(6, 3),
+            "loss_mask": torch.ones(6, 3, dtype=torch.bool),
+            "rewards": torch.arange(6).float(),
+            "metadata": "keep",
+        }
+
+        shuffled = shuffle_padded_tensor_dict(data)
+
+        assert shuffled["metadata"] == "keep"
+        assert sorted(shuffled["rewards"].tolist()) == list(range(6))
+        for row, reward in zip(shuffled["input_ids"], shuffled["rewards"]):
+            original_index = int(reward.item())
+            torch.testing.assert_close(row, data["input_ids"][original_index])
+
+    def test_actor_ppo_update_runs_each_minibatch_for_each_epoch(self):
+        from areal.api.cli_args import PPOActorConfig
+        from areal.trainer.ppo.actor import PPOActor
+
+        class FakeActorEngine:
+            def __init__(self):
+                self.train_batches = []
+
+            def train(self):
+                pass
+
+            def get_version(self):
+                return 0
+
+            def train_batch(self, mb, loss_fn, loss_weight_fn):
+                self.train_batches.append(mb["input_ids"].clone())
+                return {"update_successful": 1.0}
+
+        engine = FakeActorEngine()
+        config = PPOActorConfig(
+            backend="fsdp:d1",
+            ppo_n_minibatches=2,
+            ppo_n_epochs=3,
+        )
+        actor = PPOActor(config, engine)
+        data = {
+            "attention_mask": torch.ones(4, 3, dtype=torch.bool),
+            "loss_mask": torch.ones(4, 3, dtype=torch.bool),
+            "rewards": torch.tensor([1.0, 0.0, 1.0, 0.0]),
+            "tot_rewards": torch.ones(4, 3),
+            "kl_rewards": torch.zeros(4, 3),
+            "advantages": torch.ones(4, 3),
+            "input_ids": torch.arange(12).view(4, 3),
+            "prox_logp": torch.zeros(4, 3),
+            "logprobs": torch.zeros(4, 3),
+        }
+
+        actor._ppo_update(data)
+
+        assert len(engine.train_batches) == 6
+
+    def test_critic_ppo_update_runs_each_minibatch_for_each_epoch(self):
+        from areal.api.cli_args import PPOCriticConfig
+        from areal.trainer.ppo.critic import PPOCritic
+
+        class FakeCriticEngine:
+            def __init__(self):
+                self.train_batches = []
+
+            def train(self):
+                pass
+
+            def train_batch(self, mb, loss_fn, loss_weight_fn):
+                self.train_batches.append(mb["input_ids"].clone())
+                return {"update_successful": 1.0}
+
+        engine = FakeCriticEngine()
+        config = PPOCriticConfig(
+            backend="fsdp:d1",
+            ppo_n_minibatches=2,
+            ppo_n_epochs=3,
+        )
+        critic = PPOCritic(config, engine)
+        data = {
+            "attention_mask": torch.ones(4, 3, dtype=torch.bool),
+            "loss_mask": torch.ones(4, 3, dtype=torch.bool),
+            "input_ids": torch.arange(12).view(4, 3),
+            "values": torch.zeros(4, 3),
+            "returns": torch.ones(4, 3),
+        }
+
+        critic._ppo_update(data)
+
+        assert len(engine.train_batches) == 6
 
 
 if __name__ == "__main__":

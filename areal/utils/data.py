@@ -56,6 +56,26 @@ def dict_map(x: dict, fn: Callable) -> dict:
     return {k: fn(v) for k, v in x.items()}
 
 
+def shuffle_padded_tensor_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Shuffle batch-major entries in a padded tensor dict."""
+    if "attention_mask" not in data:
+        raise ValueError("Input data must be padded and contain 'attention_mask' key.")
+
+    bs = data["attention_mask"].shape[0]
+    permutation = torch.randperm(bs, device=data["attention_mask"].device)
+    shuffled: dict[str, Any] = {}
+    multimodal_keys = {key for key in data if is_multi_modal_key(key)}
+
+    for key, value in data.items():
+        if key in multimodal_keys:
+            shuffled[key] = [value[int(i)] for i in permutation.cpu().tolist()]
+        elif torch.is_tensor(value) and value.ndim >= 1 and value.shape[0] == bs:
+            shuffled[key] = value.index_select(0, permutation)
+        else:
+            shuffled[key] = value
+    return shuffled
+
+
 def dict_of_list2list_of_dict(
     dict_of_lists: dict[str, list[Any]],
 ) -> list[dict[str, Any]]:

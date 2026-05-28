@@ -1387,6 +1387,18 @@ class PPOActorConfig(TrainEngineConfig):
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )
+    ppo_n_epochs: int = field(
+        default=1,
+        metadata={
+            "help": "Number of optimization epochs over each rollout batch during PPO update."
+        },
+    )
+    ppo_shuffle_minibatches: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to reshuffle rollout samples before splitting PPO minibatches for each PPO epoch."
+        },
+    )
     eps_clip: float = field(
         default=0.2, metadata={"help": "Clipping factor for policy ratio"}
     )
@@ -1575,6 +1587,12 @@ class PPOActorConfig(TrainEngineConfig):
                     "SAPO is not compatible with `use_decoupled_loss=True`. "
                     "Please set `actor.use_decoupled_loss=false` in your configuration."
                 )
+        if self.ppo_n_minibatches <= 0:
+            raise ValueError(
+                f"ppo_n_minibatches must be positive, got {self.ppo_n_minibatches}"
+            )
+        if self.ppo_n_epochs <= 0:
+            raise ValueError(f"ppo_n_epochs must be positive, got {self.ppo_n_epochs}")
 
         super().__post_init__()
 
@@ -1586,6 +1604,18 @@ class PPOCriticConfig(TrainEngineConfig):
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )
+    ppo_n_epochs: int = field(
+        default=1,
+        metadata={
+            "help": "Number of optimization epochs over each rollout batch during PPO update."
+        },
+    )
+    ppo_shuffle_minibatches: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to reshuffle rollout samples before splitting PPO minibatches for each PPO epoch."
+        },
+    )
     eps_clip: float = field(
         default=0.5, metadata={"help": "Clipping factor for value loss"}
     )
@@ -1595,6 +1625,16 @@ class PPOCriticConfig(TrainEngineConfig):
             "help": "Mask truncated generations (no EOS token) and exclude from training"
         },
     )
+
+    def __post_init__(self):
+        """Validate PPO critic configuration."""
+        if self.ppo_n_minibatches <= 0:
+            raise ValueError(
+                f"ppo_n_minibatches must be positive, got {self.ppo_n_minibatches}"
+            )
+        if self.ppo_n_epochs <= 0:
+            raise ValueError(f"ppo_n_epochs must be positive, got {self.ppo_n_epochs}")
+        super().__post_init__()
 
 
 def get_py_cmd(module: str, args: dict[str, Any]):

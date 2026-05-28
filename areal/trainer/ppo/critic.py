@@ -16,6 +16,7 @@ from areal.trainer.ppo.stats import infer_token_denominator
 from areal.utils import stats_tracker
 from areal.utils.data import (
     batched_call,
+    shuffle_padded_tensor_dict,
     split_padded_tensor_dict_into_mb_list,
 )
 from areal.utils.functional import ppo_critic_loss_fn
@@ -49,6 +50,8 @@ class PPOCritic:
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
             eps_clip=self.config.eps_clip,
+            ppo_n_epochs=self.config.ppo_n_epochs,
+            ppo_shuffle_minibatches=self.config.ppo_shuffle_minibatches,
         )
         stats_tracker.scalar(**scalars)
         ########## Logging code ends ##########
@@ -58,20 +61,25 @@ class PPOCritic:
 
         # NOTE: calling engine.train() is critical to enabling gradient checkpointing
         self.engine.train()
-        mb_inputs = split_padded_tensor_dict_into_mb_list(
-            data,
-            mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
-        )
-        for mb in mb_inputs.mbs:
-            train_stat = self.engine.train_batch(
-                mb,
-                loss_fn=functools.partial(
-                    ppo_loss_fn,
-                    eps_clip=self.config.eps_clip,
-                ),
-                loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+        for epoch_idx in range(self.config.ppo_n_epochs):
+            epoch_data = data
+            if self.config.ppo_shuffle_minibatches:
+                epoch_data = shuffle_padded_tensor_dict(data)
+            mb_inputs = split_padded_tensor_dict_into_mb_list(
+                epoch_data,
+                mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
             )
-            stats_tracker.scalar(**train_stat)
+            stats_tracker.scalar(ppo_epoch=epoch_idx)
+            for mb in mb_inputs.mbs:
+                train_stat = self.engine.train_batch(
+                    mb,
+                    loss_fn=functools.partial(
+                        ppo_loss_fn,
+                        eps_clip=self.config.eps_clip,
+                    ),
+                    loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+                )
+                stats_tracker.scalar(**train_stat)
 
 
 class PPOCriticController(TrainController):
