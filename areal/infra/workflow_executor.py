@@ -1108,9 +1108,14 @@ class WorkflowExecutor:
                             f"Failed to dump trajectory for task {task_id}: {dump_reason}"
                         )
 
+                stats_tracker.get("rollout").scalar(accepted=int(should_accept_traj))
+                stats_tracker.get("rollout").scalar(rejected=int(reason == "rejected"))
+                stats_tracker.get("rollout").scalar(
+                    rejected_none=int(reason == "rejected_none")
+                )
+
                 if should_accept_traj:
                     manager.on_rollout_accepted()
-                    stats_tracker.get("rollout").scalar(accepted=1)
                     trace_session_event(
                         "mark_finalized",
                         task_id=task_id,

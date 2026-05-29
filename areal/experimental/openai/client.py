@@ -715,6 +715,7 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
             n_samples=n,
             temperature=temp,
             max_new_tokens=max_new_tokens,
+            max_tokens=max_total_tokens_final or 32768,
             top_p=top_p_val,
             stop=stop_tokens,
             greedy=temp == 0,
